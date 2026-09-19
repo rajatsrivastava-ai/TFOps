@@ -1,0 +1,26 @@
+# Render blueprint — the quickest always-on host for this.
+# Push the repo to GitHub, then: Render → New → Blueprint → pick the repo.
+#
+# Set TFOPS_PASSWORD and TFOPS_VIEW_PASSWORD in the dashboard after the first
+# deploy (sync:false keeps them out of the repo).
+services:
+  - type: web
+    name: tfops
+    runtime: docker
+    plan: starter            # the free plan has no persistent disk — the board would reset
+    healthCheckPath: /login
+    disk:
+      name: tfops-data
+      mountPath: /data       # matches DATA_DIR in the Dockerfile
+      sizeGB: 1
+    envVars:
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DATA_DIR
+        value: /data
+      - key: TFOPS_PASSWORD
+        sync: false
+      - key: TFOPS_VIEW_PASSWORD
+        sync: false
+      - key: TFOPS_SECRET
+        generateValue: true

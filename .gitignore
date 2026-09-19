@@ -1,0 +1,20 @@
+# ── Company data. None of this belongs in a public repo. ───────────────────
+# The live board: clients, revenue, staff names, every status update.
+data/
+# The original export and the revenue sheet it came from — both carry the
+# full client book inline. Keep them on the server, not in git.
+PodLoadBoard.html
+RevenueVsDM_*.xlsx
+*.xlsx
+
+# ── Secrets ────────────────────────────────────────────────────────────────
+passwords.cmd
+.env
+*.pem
+
+# ── Noise ──────────────────────────────────────────────────────────────────
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+.claude/
