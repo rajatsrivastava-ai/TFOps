@@ -69,6 +69,12 @@ it behind SSO.
 
 ## Putting it online
 
+**GitHub Pages cannot host this.** Pages serves static files only — there is no
+Node process, so `/api/*` never answers and nothing can be saved. And a Pages
+site built from a public repo is public to the world, which is the last place
+this board belongs. The options below all keep the repo as the source of truth
+and deploy *from* it.
+
 Pick by how permanent you want it.
 
 ### 1. Office LAN — nothing to set up
@@ -99,11 +105,20 @@ The quick-tunnel URL changes each time you restart it. For a stable address,
 `cloudflared tunnel create tfops` against a domain you own. The machine still
 has to stay on.
 
-### 3. Always-on hosting — the real answer, about $7/month
+### 3. Always-on hosting, deployed from GitHub — the real answer
 
-`Dockerfile` and `render.yaml` are in the repo. Push to GitHub, then on Render:
-**New → Blueprint → pick the repo**. After the first deploy, set
-`TFOPS_PASSWORD` and `TFOPS_VIEW_PASSWORD` in the dashboard.
+`Dockerfile` and `render.yaml` are in the repo, so Render can read the whole
+setup from the repo itself:
+
+1. **render.com → New → Blueprint → pick `TFOPS`.** It reads `render.yaml`.
+2. Set `TFOPS_PASSWORD` and `TFOPS_VIEW_PASSWORD` in the dashboard (the
+   blueprint marks them `sync: false`, so they never live in git).
+3. Every `git push` to `main` redeploys automatically.
+
+The board starts **empty**, because the data files are gitignored. To bring your
+own sheet across, open a shell on the service and copy an export to
+`/data`, then run `node lib/seed.js --force`. After that the disk is the source
+of truth and deploys never touch it.
 
 **Do not use a free plan.** Free tiers have no persistent disk, so the board
 resets to the seed data on every restart and you lose everything the team typed.

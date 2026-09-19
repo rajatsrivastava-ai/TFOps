@@ -1,0 +1,67 @@
+# Runs on GitHub for every push. There are no dependencies and no build, so the
+# only thing worth asserting is the thing that actually broke once: that a clean
+# checkout — with no data files, because they are gitignored — seeds itself and
+# serves a page.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Parse every source file
+        run: |
+          for f in server.js lib/*.js; do node --check "$f"; done
+          for f in public/js/*.js public/js/views/*.js; do
+            node --input-type=module --eval "$(printf 'import(%s);' "'./$f'")" \
+              --experimental-detect-module >/dev/null 2>&1 || node --check "$f" || exit 1
+          done
+        shell: bash
+
+      - name: Seed a clean board
+        run: node lib/seed.js
+
+      - name: Boot and serve
+        run: |
+          node server.js &
+          for i in $(seq 1 20); do
+            curl -sf -o /dev/null http://localhost:8848/ && break || sleep 0.5
+          done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8848/)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8848/api/state)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8848/app.css)" = "200"
+        shell: bash
+
+      - name: Login gate engages when a password is set
+        env:
+          TFOPS_PASSWORD: ci-test-password
+          PORT: "8849"
+        run: |
+          node server.js &
+          for i in $(seq 1 20); do
+            curl -sf -o /dev/null http://localhost:8849/login && break || sleep 0.5
+          done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8849/api/state)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8849/login)" = "200"
+        shell: bash
+
+      - name: No client data may enter the repo
+        run: |
+          if git ls-files | grep -qiE 'PodLoadBoard|\.xlsx$|^data/'; then
+            echo "A data file is tracked. These carry the client book and must stay gitignored."
+            git ls-files | grep -iE 'PodLoadBoard|\.xlsx$|^data/'
+            exit 1
+          fi
+          echo "clean"
+        shell: bash
