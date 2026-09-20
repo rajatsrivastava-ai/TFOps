@@ -151,8 +151,10 @@ async function req(method, path, body) {
   let payload = {};
   try { payload = await res.json(); } catch (_) {}
   if (res.status === 401 && payload.login) {
+    // Flagged, because the browser is already leaving — whoever catches this
+    // should stay quiet rather than paint an error nobody will finish reading.
     location.href = "/login";
-    throw new Error("Signed out");
+    throw Object.assign(new Error("Signed out"), { redirecting: true });
   }
   if (!res.ok) throw new Error(payload.error || `${method} ${path} failed (${res.status})`);
   return payload;

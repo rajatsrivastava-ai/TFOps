@@ -1,6 +1,12 @@
 "use strict";
 /* TFOps dashboard server — no dependencies, `node server.js` and you are up.
-   Serves public/ and a small JSON API over data/store.json.
+   Serves public/ and a small JSON API over the board.
+
+   The same file runs two ways. On a machine with a disk it listens on a port
+   and keeps the board in data/store.json. On Vercel it is imported by
+   api/index.js and handles one request at a time, with the board in Upstash
+   (lib/store.js picks the backend from the environment). Nothing below cares
+   which, beyond waiting for `store.ready()` before it reads anything.
 
    Env:
      PORT                 (default 8848)
@@ -8,11 +14,14 @@
      DATA_DIR             where store.json lives (default ./data)
      TFOPS_PASSWORD       full-access password; setting it turns on the login
      TFOPS_VIEW_PASSWORD  read-only password for leadership
-     TFOPS_SECRET         session signing key (otherwise generated into DATA_DIR)
+     TFOPS_SECRET         session signing key (otherwise kept by the store)
      TRUST_PROXY=1        behind an HTTPS proxy — issue Secure cookies
+     KV_REST_API_URL      \ set these two and the board moves to Upstash Redis
+     KV_REST_API_TOKEN    / (the Vercel integration adds them for you)
 
    With no password set the board runs open, which is fine on a LAN and not
-   fine on the internet; the server says so loudly at startup. */
+   fine on the internet; the server says so loudly at startup, and refuses to
+   serve at all on a host that is public by definition. */
 
 const http = require("http");
 const fs = require("fs");
@@ -21,10 +30,13 @@ const crypto = require("crypto");
 const store = require("./lib/store");
 const auth = require("./lib/auth");
 const loginPage = require("./lib/login-page");
+const noticePage = require("./lib/notice-page");
 
 const PORT = Number(process.env.PORT || 8848);
 const HOST = process.env.HOST || "0.0.0.0";
-const TRUST_PROXY = process.env.TRUST_PROXY === "1";
+// Vercel is always HTTPS and always public — take both as given.
+const SERVERLESS = !!process.env.VERCEL;
+const TRUST_PROXY = process.env.TRUST_PROXY === "1" || SERVERLESS;
 const PUBLIC = path.join(__dirname, "public");
 const MAX_BODY = 1_000_000;
 
@@ -101,23 +113,25 @@ function who(req) {
 
 /* ------------------------------------------------------------ static files */
 
-function serveStatic(req, res, pathname) {
+async function serveStatic(req, res, pathname) {
   let rel = pathname === "/" ? "/index.html" : pathname;
   rel = decodeURIComponent(rel).replace(/\\/g, "/");
   const file = path.join(PUBLIC, path.normalize(rel));
   if (!file.startsWith(PUBLIC)) return send(res, 403, "forbidden");
-  fs.stat(file, (err, st) => {
-    if (err || !st.isFile()) {
-      // Unknown path inside the app → let the client router handle it.
-      if (!path.extname(rel)) return serveStatic(req, res, "/");
-      return send(res, 404, "not found");
-    }
-    const etag = `"${st.size}-${st.mtimeMs}"`;
-    if (req.headers["if-none-match"] === etag) return send(res, 304, "");
-    send(res, 200, fs.readFileSync(file), {
-      "content-type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream",
-      etag,
-    });
+  let st;
+  try {
+    st = await fs.promises.stat(file);
+    if (!st.isFile()) throw new Error("not a file");
+  } catch (_) {
+    // Unknown path inside the app → let the client router handle it.
+    if (!path.extname(rel)) return serveStatic(req, res, "/");
+    return send(res, 404, "not found");
+  }
+  const etag = `"${st.size}-${st.mtimeMs}"`;
+  if (req.headers["if-none-match"] === etag) return send(res, 304, "");
+  send(res, 200, await fs.promises.readFile(file), {
+    "content-type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream",
+    etag,
   });
 }
 
@@ -138,6 +152,11 @@ async function api(req, res, url, sess = { role: "edit" }) {
   const method = req.method.toUpperCase();
   const me = who(req);
 
+  /* Everything below reads the board, so it has to be current first. The two
+     exceptions matter: /api/version is the poll every open tab runs every 12
+     seconds, and it only needs the counter. */
+  if (seg[0] !== "version" && seg[0] !== "me") await store.ready();
+
   /* --- identity ------------------------------------------------------- */
   if (seg[0] === "me") {
     if (method === "GET") return json(res, 200, { name: me });
@@ -157,7 +176,7 @@ async function api(req, res, url, sess = { role: "edit" }) {
   }
 
   if (seg[0] === "version" && method === "GET") {
-    return json(res, 200, { version: store.snapshot().version, updatedAt: store.snapshot().updatedAt });
+    return json(res, 200, await store.version());
   }
 
   if (!me) return json(res, 401, { error: "Pick who you are first." });
@@ -338,13 +357,52 @@ function readForm(req) {
   });
 }
 
-const server = http.createServer((req, res) => {
+/* Once per instance: take the session key the store keeps for us, so a second
+   copy of this process signs the same cookies. On a disk-backed run there is
+   nothing to fetch and auth falls back to DATA_DIR exactly as before. */
+let prepared = null;
+function prepare() {
+  if (!prepared) {
+    prepared = store.sessionSecret()
+      .then((key) => { if (key) auth.useSecret(key); })
+      .catch((err) => { prepared = null; throw err; });
+  }
+  return prepared;
+}
+
+/* A host that is public by definition, serving a board with no password, would
+   hand the client book to anyone who found the URL. Say what is missing. */
+const setupNotice = () => noticePage({
+  title: "Set a password before this serves anything",
+  lead: "This deploy is on the public internet and no password is configured, "
+      + "so the board is not being served.",
+  tone: "stop",
+  steps: [
+    { text: "In the Vercel project, Settings → Environment Variables, add the full-access password:",
+      code: "TFOPS_PASSWORD = a long phrase only the delivery team knows" },
+    { text: "Optionally add the read-only one for leadership:",
+      code: "TFOPS_VIEW_PASSWORD = a different phrase" },
+    "Redeploy — environment variables only reach a new deployment.",
+  ],
+});
+
+async function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const html = { "content-type": "text/html; charset=utf-8" };
+
+  await prepare();
+
+  if (SERVERLESS && !auth.isEnabled()) {
+    if (url.pathname.startsWith("/api/")) {
+      return json(res, 503, { error: "No password is set on this deploy, so the board is not being served." });
+    }
+    return send(res, 503, setupNotice(), html);
+  }
 
   /* --- login, logout ---------------------------------------------------- */
   if (url.pathname === "/login") {
     if (!auth.isEnabled()) return send(res, 302, "", { location: "/" });
+    await store.ready();
     const data = store.snapshot();
     const page = (extra) => loginPage({
       orgName: data.settings.orgName,
@@ -401,51 +459,80 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname.startsWith("/api/")) {
-    Promise.resolve()
-      .then(() => api(req, res, url, sess))
-      .catch((err) => {
-        console.error("api error:", err);
-        if (!res.headersSent) json(res, 500, { error: err.message || "server error" });
-      });
-    return;
+    // Awaited, not fired off: on a serverless host the request is not finished
+    // until this is, and the wrapper below owns the failure case.
+    return api(req, res, url, sess);
   }
 
   if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "method not allowed");
-  serveStatic(req, res, url.pathname);
-});
+  return serveStatic(req, res, url.pathname);
+}
 
-server.listen(PORT, HOST, () => {
-  const data = store.snapshot();
-  const nets = require("os").networkInterfaces();
-  const lan = Object.values(nets).flat()
-    .filter((n) => n && n.family === "IPv4" && !n.internal).map((n) => n.address);
-  console.log(`\n  TFOps dashboard`);
-  console.log(`  ${data.projects.length} projects · ${data.revenue.length} clients · ${data.people.length} people · v${data.version}`);
-  console.log(`  Data      ${store.FILE}`);
-  console.log(`\n  Local     http://localhost:${PORT}`);
-  lan.forEach((ip) => console.log(`  Team      http://${ip}:${PORT}`));
-
-  if (auth.isEnabled()) {
-    console.log(`\n  Login is ON`
-      + (process.env.TFOPS_PASSWORD ? " · full-access password set" : "")
-      + (process.env.TFOPS_VIEW_PASSWORD ? " · read-only password set" : ""));
-    if (!TRUST_PROXY) {
-      console.log(`  Set TRUST_PROXY=1 when you put this behind HTTPS, so cookies are marked Secure.`);
-    }
-  } else {
-    console.log(`\n  ⚠  NO PASSWORD SET — anyone who can reach this port can read and edit`);
-    console.log(`     the whole board, revenue included. Fine on your own machine or a`);
-    console.log(`     trusted LAN. Before putting it on the internet, set:`);
-    console.log(`       TFOPS_PASSWORD=...  and optionally  TFOPS_VIEW_PASSWORD=...`);
-  }
-  console.log("");
-});
-
-/* Finish in-flight writes before the process goes away. */
-for (const sig of ["SIGINT", "SIGTERM"]) {
-  process.on(sig, () => {
-    console.log(`\n  ${sig} — shutting down.`);
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 3000).unref();
+/** What both hosts call. Anything thrown above lands here, once, as a page or
+    as JSON — never as a dead socket and never as a stack trace in the body. */
+function handler(req, res) {
+  handle(req, res).catch((err) => {
+    console.error("request failed:", err.message);
+    if (res.headersSent) return res.end();
+    const message = err.message || "server error";
+    if ((req.url || "").startsWith("/api/")) return json(res, 500, { error: message });
+    send(res, 500, noticePage({
+      title: "The board is not there",
+      lead: message,
+      tone: "stop",
+      steps: store.backend === "redis"
+        ? [{ text: "If the store is empty, push the board up from the machine that has it:",
+             code: "node tools/remote.js push" }]
+        : [{ text: "Build the board from the sheet export:", code: "node lib/seed.js" }],
+    }), { "content-type": "text/html; charset=utf-8" });
   });
+}
+
+module.exports = handler;
+
+/* Run directly — a laptop, a VPS, a container. Under Vercel this file is only
+   ever imported, so nothing below runs there. */
+if (require.main === module) {
+  const server = http.createServer(handler);
+
+  server.listen(PORT, HOST, async () => {
+    const nets = require("os").networkInterfaces();
+    const lan = Object.values(nets).flat()
+      .filter((n) => n && n.family === "IPv4" && !n.internal).map((n) => n.address);
+    console.log(`\n  TFOps dashboard`);
+    try {
+      const data = await store.ready();
+      console.log(`  ${data.projects.length} projects · ${data.revenue.length} clients`
+        + ` · ${data.people.length} people · v${data.version}`);
+    } catch (err) {
+      console.log(`  ⚠  ${err.message}`);
+    }
+    console.log(`  Data      ${store.describe()}`);
+    console.log(`\n  Local     http://localhost:${PORT}`);
+    lan.forEach((ip) => console.log(`  Team      http://${ip}:${PORT}`));
+
+    if (auth.isEnabled()) {
+      console.log(`\n  Login is ON`
+        + (process.env.TFOPS_PASSWORD ? " · full-access password set" : "")
+        + (process.env.TFOPS_VIEW_PASSWORD ? " · read-only password set" : ""));
+      if (!TRUST_PROXY) {
+        console.log(`  Set TRUST_PROXY=1 when you put this behind HTTPS, so cookies are marked Secure.`);
+      }
+    } else {
+      console.log(`\n  ⚠  NO PASSWORD SET — anyone who can reach this port can read and edit`);
+      console.log(`     the whole board, revenue included. Fine on your own machine or a`);
+      console.log(`     trusted LAN. Before putting it on the internet, set:`);
+      console.log(`       TFOPS_PASSWORD=...  and optionally  TFOPS_VIEW_PASSWORD=...`);
+    }
+    console.log("");
+  });
+
+  /* Finish in-flight writes before the process goes away. */
+  for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.on(sig, () => {
+      console.log(`\n  ${sig} — shutting down.`);
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(0), 3000).unref();
+    });
+  }
 }

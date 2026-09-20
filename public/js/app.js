@@ -515,6 +515,7 @@ async function boot() {
   try {
     await refresh(true);
   } catch (err) {
+    if (err.redirecting) return;   // on the way to the login page
     $("#main").innerHTML = `<section class="card"><div class="empty">
       <div class="big">Could not reach the board</div>${esc(err.message)}</div></section>`;
     return;

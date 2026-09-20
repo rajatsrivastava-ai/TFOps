@@ -59,7 +59,9 @@ read-only session gets `403` on every write even if someone crafts the request
 by hand.
 
 Sessions are signed cookies valid for 30 days. The signing key is generated into
-the data directory on first run, or set it yourself with `TFOPS_SECRET`.
+the data directory on first run — or, where there is no disk to keep it on, into
+the store next to the board, so every copy of the process signs the same
+cookies. Set it yourself with `TFOPS_SECRET` if you would rather.
 
 **Its limits, plainly:** this is one shared password per role. It does not give
 you per-person accounts, and it cannot tell you *which* teammate used the team
@@ -126,7 +128,45 @@ The blueprint asks for a 1 GB disk mounted at `/data`; that is what makes it
 durable. Railway and Fly.io work the same way — Docker plus a mounted volume at
 `DATA_DIR`.
 
-### 4. Your own VPS
+### 4. Vercel — nothing to keep awake, and the board moves off the disk
+
+Vercel gives a function a read-only disk and throws the instance away between
+requests, so the file store has nowhere to live there. The board goes to Upstash
+Redis instead — one document, same shape, behind a network call. `lib/store.js`
+switches backends by itself the moment the credentials are in the environment;
+the login, the roles, the audit trail and the daily snapshot all work the same.
+
+1. **Import the repo** — vercel.com → Add New → Project. Leave the build
+   settings alone; `vercel.json` already says what to do with them.
+2. **Add the store** — Storage → Create Database → Upstash Redis, connected to
+   this project. That sets `KV_REST_API_URL` and `KV_REST_API_TOKEN` for you.
+3. **Set the passwords** — Settings → Environment Variables: `TFOPS_PASSWORD`,
+   and `TFOPS_VIEW_PASSWORD` if leadership should be read-only. Until one is
+   set the deploy refuses to serve the board at all and says so on the page: a
+   public URL with no password is the client book on the open internet.
+4. **Redeploy.** Environment variables only reach a new deployment.
+5. **Send the board up** from the machine that has it. Put the two credentials
+   in a `.env` at the repo root — gitignored, so the token stays off GitHub —
+   then:
+
+```bash
+node tools/remote.js push
+```
+
+`info` says what is up there, `pull` brings it back down, and
+`pull --day=2026-09-20` fetches one of the daily snapshots. Restoring is a
+`pull --day=...` followed by a `push --force`.
+
+Two things worth knowing before you settle on it:
+
+- **Vercel's free plan is for personal use.** The Hobby terms exclude commercial
+  work, and this is a company's operations board. Budget for Pro.
+- **Every open tab polls every 12 seconds** — around 25,000 reads a day across
+  ten people, past Upstash's free daily allowance and into a couple of dollars a
+  month on pay-as-you-go. The poll reads one small counter key rather than the
+  whole board, which is what keeps that number that low.
+
+### 5. Your own VPS
 
 ```bash
 docker build -t tfops .
@@ -149,10 +189,23 @@ scp server:/srv/tfops/store.json ./tfops-$(date +%F).json
 The server also keeps its own daily snapshot in `<DATA_DIR>/backups/` for 30 days,
 but that is on the same disk — it protects against a bad edit, not a dead volume.
 
+On a hosted store the same snapshot goes to a dated key beside the board, and
+the way off the platform is a pull:
+
+```bash
+node tools/remote.js pull --force
+```
+
 ## Where the data lives
 
 `data/store.json` (or `$DATA_DIR/store.json`) — one file, the whole board. Writes
 are atomic: written to a temp file, then renamed.
+
+Where there is no disk worth writing to — a serverless host — the same document
+lives in Upstash Redis instead, gzipped, with writes guarded by a compare-and-set
+so two people saving at once cannot overwrite each other. That backend turns on
+by itself when `KV_REST_API_URL` and `KV_REST_API_TOKEN` are set, and nothing
+above the store knows the difference.
 
 **The repo ships no data.** Our own board was imported from a single-file HTML
 export (`PodLoadBoard.html`) that is gitignored, because it carries the client

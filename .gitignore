@@ -10,7 +10,11 @@ RevenueVsDM_*.xlsx
 # ── Secrets ────────────────────────────────────────────────────────────────
 passwords.cmd
 .env
+.env.local
 *.pem
+
+# The Vercel CLI's project link, and its local build output.
+.vercel
 
 # ── Noise ──────────────────────────────────────────────────────────────────
 node_modules/

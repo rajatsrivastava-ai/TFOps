@@ -1,0 +1,16 @@
+{
+  "name": "tfops",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TrueFan operations board — a Node server with no dependencies.",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node lib/seed.js",
+    "push": "node tools/remote.js push",
+    "pull": "node tools/remote.js pull"
+  },
+  "engines": { "node": ">=20" }
+}

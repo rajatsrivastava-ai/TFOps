@@ -22,7 +22,7 @@ jobs:
 
       - name: Parse every source file
         run: |
-          for f in server.js lib/*.js; do node --check "$f"; done
+          for f in server.js lib/*.js api/*.js tools/*.js; do node --check "$f"; done
           for f in public/js/*.js public/js/views/*.js; do
             node --input-type=module --eval "$(printf 'import(%s);' "'./$f'")" \
               --experimental-detect-module >/dev/null 2>&1 || node --check "$f" || exit 1
@@ -41,6 +41,15 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8848/)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8848/api/state)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8848/app.css)" = "200"
+        shell: bash
+
+      - name: The serverless entry point imports without listening
+        run: |
+          node -e "
+            const h = require('./api/index.js');
+            if (typeof h !== 'function') { console.error('api/index.js must export a handler'); process.exit(1); }
+            console.log('api/index.js exports a handler and started no server');
+          "
         shell: bash
 
       - name: Login gate engages when a password is set
