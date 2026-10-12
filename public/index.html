@@ -5,37 +5,48 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>TFOps</title>
-<meta name="description" content="TrueFan operations board — project timeline, team status updates and the company overview.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%236258e9'/><path d='M18 22h28M32 22v22' stroke='white' stroke-width='6' stroke-linecap='round'/></svg>">
+<meta name="description" content="TrueFan AI delivery management — executive overview, project timeline, project register with daily DM updates, and editor allocation.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%236258e9'/><path d='M18 22h28M32 22v22' stroke='white' stroke-width='6' stroke-linecap='round'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="/app.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
 </head>
 <body>
 
-<header class="nav">
-  <div class="nav-in">
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
     <div class="brand">
-      <span class="brand-mark">TFOps</span>
-      <span class="brand-sub">TrueFan operations</span>
+      <span class="brand-mark">TF</span>
+      <span class="brand-txt"><b>TrueFan AI</b><small>Delivery management</small></span>
     </div>
-    <nav class="tabs" id="tabs" aria-label="Sections"></nav>
-    <div class="nav-right">
-      <span id="rolebox" class="rolebox"></span>
-      <span class="sync"><span class="pip" id="syncpip"></span><span id="synctxt">Connecting</span></span>
-      <button class="btn sm ghost" id="themebtn" data-act="theme" aria-label="Switch theme" title="Light / dark">◐</button>
-      <button class="who-btn" id="who" data-act="pick-me" aria-label="Change who you are"></button>
-    </div>
-  </div>
-</header>
+    <nav class="sidenav" id="sidenav" aria-label="Pages"></nav>
+    <div class="side-foot" id="sidefoot"></div>
+  </aside>
 
-<main class="wrap" id="main">
-  <div class="empty">Loading the board…</div>
-</main>
+  <div class="app">
+    <header class="topbar">
+      <button class="btn sm ghost navtoggle" data-act="toggle-nav" aria-label="Menu">☰</button>
+      <div class="crumbs" id="crumbs"></div>
+      <div class="top-right">
+        <span id="pending" class="pending hide"></span>
+        <input type="search" id="gsearch" class="gsearch" placeholder="Search projects, clients, people…  /" data-input="global-q" aria-label="Global search">
+        <span id="rangebox" class="rangebox"></span>
+        <button class="btn sm ghost bell" id="bell" data-act="goto" data-page="timeline" data-tab="escalations" aria-label="Open escalations"></button>
+        <span class="sync"><span class="pip" id="syncpip"></span><span id="synctxt">Connecting</span></span>
+        <button class="btn sm ghost" id="themebtn" data-act="theme" aria-label="Switch theme" title="Light / dark">◐</button>
+        <button class="who-btn" id="who" data-act="pick-me" aria-label="Change who you are"></button>
+      </div>
+    </header>
+    <main class="main" id="main">
+      <div class="empty">Loading the board…</div>
+    </main>
+  </div>
+</div>
 
 <div id="drawer-host"></div>
+<div id="dialog-host"></div>
 
 <script type="module" src="/js/app.js"></script>
 </body>

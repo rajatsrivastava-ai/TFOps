@@ -1,7 +1,9 @@
 # TFOps
 
-The TrueFan operations board: one place for the project timeline, everyone's
-status updates, escalations, and the company overview.
+TrueFan AI's delivery management board: the portfolio at a glance, every
+project's delivery plan with committed and forecast dates, structured daily DM
+updates, escalations, and editor capacity — the replacement for the Google
+Sheets tracker.
 
 A small self-hosted web app — a Node server with no dependencies and a plain-JS
 front end. Nothing to install, nothing to build.
@@ -19,25 +21,93 @@ node server.js
 
 Open <http://localhost:8848>. On Windows, double-click `start-dashboard.cmd`.
 
-## The views
+## The four pages
 
-Seven tabs, in the order they load. **Delivery load is the landing page.**
-
-| View | For | Owns |
+| Page | For | What it answers |
 |---|---|---|
-| **Delivery load** | The CEO, on open. A one-line verdict, five KPIs, live levers, and a ranked table of who takes the most team time. | capacity, headcount, team time |
-| **Overview** | The money page. Book of business, concentration, service mix, plus the what-if levers and the shared assumptions. | revenue, scenarios |
-| **Escalations** | Whoever owns the client relationship. Every live project as a card, worst first, saying what is wrong and who to call. | risk, what is on fire |
-| **Timeline** | The Gantt sheet, grouped by pod / client / DM / editor lead. Undated projects sit in a bucket underneath. | dates |
-| **Standup** | Where DMs and editor leads post status. A post can set the project's dates in the same submit. | updates |
-| **Projects** | The sheet, sortable. Click any row to edit it. | the raw rows |
-| **My work** | One person's slate, with what they owe the team on top. | the individual |
+| **Executive overview** | Leadership, the Founder's Office. Six KPIs, the delivery-health bar, the **projects-at-risk table**, DM performance, and the next seven days of commitments. The old revenue what-if lives in a collapsed Scenario card at the bottom. | What is at risk, who owns it, what lands next |
+| **Project timeline** | DMs and SDMs. **List**, **Calendar** (drag a milestone to a new day — the downstream impact shows before it saves), **Gantt**, and the **Escalation queue**. | What is due when, what will slip, what is escalated |
+| **Project register** | Everyone. One card per project (or a table): scope, ownership, committed → forecast delivery, the latest DM update — and the **Add daily update** form. Also the sheet importer. | The single source of truth per project |
+| **Editor allocation** | Delivery leadership. Capacity KPIs, the allocation matrix (hours scheduled against hours available), the editor × week assignment board, the unassigned work queue, and the reallocation flow. | Who is overloaded, what has nobody on it |
 
-Each page owns exactly one question, and links to the page that owns the next
-one rather than repeating it. The old CEO studio is now the **Run the numbers**
-section of Overview — same levers, one fewer tab. Panels that said the same
-thing twice (a duplicate capacity table, three separate service-line breakdowns,
-two risk tables) were removed, not hidden.
+Clicking any project opens a slide-over with seven tabs: Overview (the setup
+form), Scope & deliverables, Milestones & timeline, Daily updates, Team &
+allocation, Escalations, Activity.
+
+Global filters (status, priority, DM, SDM, category, client, editor, health, a
+date range and the search box) apply across every page.
+
+## Dates: committed, forecast, and what moves them
+
+Every project has one **committed delivery date** (`end` — the client's date)
+and a computed **forecast**. The committed date never moves on its own; a person
+moves it, with a reason, and the original commitment is kept beside it.
+
+A project's milestones form a dependency chain — by default Brief → Script →
+Storyboard → Base video → Client feedback → Revisions → Adaptations / Automation
+→ QC → Final delivery, in working days. Each milestone has a committed date and a
+forecast. The forecast is arithmetic on remaining work: the latest of the
+owner's own date, the working day after its dependencies finish plus its
+duration, and today — nothing unfinished finishes in the past. A finished
+milestone's forecast is the day it finished.
+
+So when a milestone is late or its owner gives a later date, everything
+downstream moves and the final forecast with it. The project turns **at risk**
+when the forecast passes the commitment, and **critical** when the commitment
+itself has passed or a high-severity escalation is open. Editing a milestone
+shows the full impact first — which milestones move, the new final date, and any
+other project that shares an editor over the moved window (a warning, never an
+automatic reschedule). Every change is in the milestone's history with its reason.
+
+The same engine (`public/js/schedule.mjs`) runs in the browser and on the
+server, so a forecast is the same number wherever it is read. A missing
+duration or date is shown as "Not set"; it is never treated as zero or as on
+track.
+
+## Daily DM updates
+
+**Add daily update** on any project opens the structured form: what was
+completed, what is planned, the current milestone, progress against scope,
+blocker and dependency owner, next action and owner, expected resolution, next
+milestone and its date, forecast final delivery, and whether an escalation is
+needed. Only the date and "what was completed" are mandatory; a draft can be
+saved and submitted later.
+
+On submit the update lands in the project's chronological history, the current
+milestone starts if it had not, the next-milestone date becomes that milestone's
+owner's date (so the forecast moves), and an escalation is raised if asked for.
+
+## Importing the DM sheet
+
+Register → **Import sheet** → paste the tracker from Google Sheets (the header
+row and every project row). Nothing changes until the preview is confirmed.
+
+- Rows are matched to the board by `client + project` (the same key the board's
+  ids are built from), then by the client's rows and the words in the project
+  name. Every match can be overridden in the preview.
+- The sheet is the source of truth for the fields it carries — unless a field
+  was edited in the app after the last import, in which case the app's value is
+  kept and both are shown.
+- Each dated column becomes one update attributed to the row's primary DM.
+  Updates are deduplicated by their **text**, not their date, because the first
+  seed guessed dates from bare weekday headers; a matching text with a different
+  date is re-dated, not duplicated.
+- Revenue from the sheet sits beside the booked figure; it replaces the booking
+  only where nothing was booked, or where the reviewer says so.
+- Nothing is deleted. Rows on the board but missing from the sheet are flagged.
+
+## Editor capacity
+
+Capacity is measured in **hours**: an assignment (Project → Team → Assign)
+carries an estimate, a window (its own dates, or the milestone it follows), and an
+editor. Utilisation over a window is scheduled hours ÷ available hours, where
+available = hours per week × working days × availability (set on the editor's
+card). Thresholds — green below 80%, amber to 100%, red above — are in Settings.
+
+When some assignments have no estimate the figure is a **lower bound**, shown
+with a "≥" and never green. The older effort-points and activity numbers are
+still on the page, kept apart from the hours and never blended: when they
+disagree, that is the signal.
 
 ## Sign-in and roles
 
@@ -137,7 +207,12 @@ switches backends by itself the moment the credentials are in the environment;
 the login, the roles, the audit trail and the daily snapshot all work the same.
 
 1. **Import the repo** — vercel.com → Add New → Project. Leave the build
-   settings alone; `vercel.json` already says what to do with them.
+   settings alone; `vercel.json` already says what to do with them. Vercel
+   will offer its "Node" preset because there is a `server.js` at the root;
+   that preset runs `server.js` as the whole site and skips `api/`, which
+   leaves every `/api/…` call answering with the page instead of data.
+   `"framework": null` in `vercel.json` keeps it on "Other" whatever the
+   dashboard says.
 2. **Add the store** — Storage → Create Database → Upstash Redis, connected to
    this project. That sets `KV_REST_API_URL` and `KV_REST_API_TOKEN` for you.
 3. **Set the passwords** — Settings → Environment Variables: `TFOPS_PASSWORD`,
@@ -200,6 +275,11 @@ node tools/remote.js pull --force
 
 `data/store.json` (or `$DATA_DIR/store.json`) — one file, the whole board. Writes
 are atomic: written to a temp file, then renamed.
+
+The store is versioned (`schema`). An older board is upgraded in place the first
+time it is read, after a copy is set aside in `backups/pre-migrate-*.json`.
+Schema 2 added the milestone chains, assignments, escalation records, the
+structured update fields and per-person capacity; nothing from schema 1 is removed.
 
 Where there is no disk worth writing to — a serverless host — the same document
 lives in Upstash Redis instead, gzipped, with writes guarded by a compare-and-set
@@ -278,28 +358,75 @@ and then again across the people named on each project. That is why every
 breakdown — by pod, by DM, by service line — adds back up to the same total. It
 also means a per-project revenue figure is an attribution, not an invoice.
 
+## A spreadsheet for the people who never open the board
+
+`tools/` turns the live board into one Excel file. Not a screenshot of it — the
+arithmetic comes across with the data, so the assumptions and the what-if levers
+are real input cells and everything downstream of them is a formula.
+
+```bash
+node tools/export-board.mjs board-export.json
+```
+
+```bash
+python tools/build-xlsx.py board-export.json TFOps-CEO-Dashboard.xlsx
+```
+
+Fourteen tabs, opening on a one-page **Dashboard**: a verdict, ten numbers, four
+charts and the ten loudest escalations. Then **Scenario** for the levers, and
+Clients, People, Escalations, Projects, Timeline, Pods, Service lines, Revenue
+and Updates for the evidence, over the Assumptions and Allocations the rest is
+built on.
+
+Shaded cells are inputs. Raise the editor-lead ceiling on Assumptions and the
+verdict on the front page rewrites itself; hire three editor leads on Scenario
+and the before/after table answers. The exporter imports the same
+`public/js/compute.js` the browser runs, so the spreadsheet and the board cannot
+drift apart.
+
+The builder needs Python and `xlsxwriter` — the one dependency anywhere in this
+repo, which is why it sits in `tools/` and not in the server.
+
+**Both outputs carry the whole client book**, so both are gitignored. Send the
+`.xlsx` the way you would send the revenue sheet itself.
+
 ## Layout
 
 ```
-server.js            HTTP + JSON API, no dependencies
+server.js            HTTP + JSON API, no dependencies; typed validation on every write
 lib/auth.js          session cookies, the two passwords
 lib/login-page.js    the sign-in screen
 lib/dates.js         date parsing for the messy sheet formats
+lib/migrate.js       schema upgrades, run on load
+lib/import-sheet.js  the DM-sheet importer: parse, match, preview, apply
+lib/schedule.js      loads the schedule engine for the server
 lib/seed.js          one-time import from PodLoadBoard.html
 lib/store.js         atomic JSON store, versioning, daily backups
 public/
   index.html
   app.css            design tokens and components
-  js/core.js         state, API client, formatting, polling
-  js/compute.js      all derived numbers — rollups, risk, escalation, scenarios
+  js/core.js         state, API client, formatting, polling, dirty-form guard
+  js/schedule.mjs    the schedule engine — forecasts, impact, capacity, health
+  js/compute.js      all derived numbers — rollups, risk, DM performance, filters
   js/charts.js       SVG chart primitives
-  js/views/*.js      one file per view
+  js/app.js          router and every action handler
+  js/views/*.js      the four pages, the project slide-over, the forms
+tests/               node --test: engine, migration, importer, server end to end
+tools/
+  export-board.mjs   flatten the board to JSON, through the live compute.js
+  build-xlsx.py      that JSON to the CEO workbook (needs xlsxwriter)
 Dockerfile           for any container host
 render.yaml          one-click Render blueprint, with the disk configured
 ```
 
 Browsers poll `/api/version` every 12 seconds and pull the board when it moves,
-so two people editing at once see each other within a few seconds.
+so two people editing at once see each other within a few seconds. A poll never
+repaints a form someone is typing in; it shows a "Board changed — refresh" chip
+instead.
+
+```bash
+npm test
+```
 
 ## Notes
 

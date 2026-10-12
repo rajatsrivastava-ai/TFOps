@@ -23,10 +23,13 @@ jobs:
       - name: Parse every source file
         run: |
           for f in server.js lib/*.js api/*.js tools/*.js; do node --check "$f"; done
-          for f in public/js/*.js public/js/views/*.js; do
-            node --input-type=module --eval "$(printf 'import(%s);' "'./$f'")" \
-              --experimental-detect-module >/dev/null 2>&1 || node --check "$f" || exit 1
+          for f in public/js/*.js public/js/*.mjs public/js/views/*.js; do
+            node --input-type=module --check < "$f" || exit 1
           done
+        shell: bash
+
+      - name: Unit and end-to-end tests
+        run: npm test
         shell: bash
 
       - name: Seed a clean board

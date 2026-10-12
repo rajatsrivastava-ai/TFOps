@@ -3,7 +3,7 @@
   "framework": null,
   "outputDirectory": "public",
   "functions": {
-    "api/index.js": { "maxDuration": 15 }
+    "api/index.js": { "maxDuration": 15, "includeFiles": "public/js/schedule.mjs" }
   },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },

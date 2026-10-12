@@ -1,301 +1,207 @@
-/* Overview — the money page, and the CEO's place to run the numbers.
+/* Executive Overview — one screen for leadership: the portfolio, who owns
+   what, what is at risk, and what lands this week. The old revenue what-if
+   lives on in a collapsed card at the bottom. */
 
-   Scope is deliberately narrow: what the book is worth, where it is
-   concentrated, and what happens if it changes. Anything about the delivery
-   team's time lives on Delivery load; anything on fire lives on Escalations.
-   Panels that duplicated those were removed rather than kept "just in case". */
-
-import { S, esc, money, fmtCr, num, pct, avatar, seriesVar, canEdit } from "../core.js";
+import { S, esc, money, fmtCr, num, pct, fmtDate, fmtDateFull, ago, avatar, seriesVar, canEdit, TODAY, relDays, recall, persist } from "../core.js";
 import {
-  totals, podRollup, categoryRollup, concentration, settings,
-  runScenario, defaultScenario,
+  filtered, totals, riskTable, dmPerformance, upcomingDeliveries, healthOf, deliveryOf, shareOf, riskReason,
+  lastUpdate, settings, concentration, runScenario, defaultScenario, podRollup, HEALTH, HEALTH_ORDER, PRIO_ORDER,
+  forecastOf, scopeCompletion, editorsOf,
 } from "../compute.js";
-import { hbar, stackBar, bullet } from "../charts.js";
+import { hbar, bullet } from "../charts.js";
+import { filterBar, healthPill, prioBadge, kpi, deliveryCell, daysCell, lastUpdateCell, projectCell, viewBtn, revCell, tipRows, scopeLine, people, escBadge } from "./shared.js";
 
 const sc = () => (S.scenario ||= defaultScenario());
 
-/* ---------------------------------------------------------------- top */
-
-function statTiles() {
-  const t = totals();
-  const conc = concentration();
+function kpis(list) {
+  const t = totals(list);
+  const revPerDM = t.activeDmCount ? t.rev / t.activeDmCount : null;
   return `
-    <div class="stats">
-      <div class="stat hero">
-        <div class="k">Book of business</div>
-        <div class="v num">₹${esc(num(t.rev / 1e7, 2))}<small>Cr</small></div>
-        <div class="n">${t.clientCount} clients · ${t.n} project rows</div>
+    <div class="kpis">
+      ${kpi({ k: "Total projects", v: t.n, n: `${t.active} active · ${t.hold} on hold${t.upcoming ? ` · ${t.upcoming} upcoming` : ""}`, tip: "Every project row inside the current filters.", act: "goto", attrs: 'data-page="register"' })}
+      ${kpi({ k: "Active DMs", v: t.activeDmCount, n: `${t.dmCount} named overall`, tip: "DMs with at least one Active project. A project with two DMs counts once for each." })}
+      ${kpi({ k: "Revenue per DM", v: revPerDM == null ? "—" : esc(money(revPerDM)), n: `${esc(money(t.rev))} across ${t.activeDmCount} DMs`, tip: "Total attributed revenue ÷ distinct DMs on active projects. Shared ownership is split evenly, so revenue is counted once." })}
+      ${kpi({ k: "Projects per DM", v: t.activeDmCount ? num(t.loadPerDM, 1) : "—", n: "active projects, shared ones split", tip: "Active project assignments ÷ distinct active DMs. A project with two DMs is half a project to each." })}
+      ${kpi({ k: "Projects per editor", v: t.edCount ? num(t.active / t.edCount, 1) : "—", n: `${t.edCount} editors on active work`, tip: "Active projects ÷ distinct editors named on them or assigned. Counts, not hours — hours are on Editor Allocation." })}
+      ${kpi({ k: "Projects at risk", v: t.projectsAtRisk, n: `${esc(money(t.revAtRisk))} riding on them`, tip: "Overdue, forecast to miss the committed date, blocked, or escalated.", tone: t.projectsAtRisk ? "hot" : "", act: "quick-go", attrs: 'data-key="atrisk"' })}
+    </div>
+    <div class="muted small" style="margin:-4px 0 12px">Reporting as of ${esc(fmtDateFull(TODAY))}${S.range.preset !== "all" ? " · date range applied" : ""} · ${esc(scopeLine(list))}</div>`;
+}
+
+function healthBar(list) {
+  const t = totals(list);
+  const order = ["on_track", "at_risk", "critical", "unknown", "upcoming", "on_hold", "completed"];
+  const colour = { on_track: "var(--good)", at_risk: "var(--warn)", critical: "var(--crit)", unknown: "var(--neutral)", upcoming: "var(--s1)", on_hold: "var(--neutral)", completed: "var(--s7)" };
+  const parts = order.map((k) => ({ k, n: t.health[k] || 0 })).filter((x) => x.n);
+  const total = parts.reduce((s, x) => s + x.n, 0) || 1;
+  const sel = S.filters.health || [];
+  return `
+    <section class="card" style="margin-bottom:12px">
+      <div class="card-h"><h2>Delivery health</h2><span class="spacer"></span>${sel.length ? `<button class="btn xs ghost" data-act="fchip-clear" data-key="health">Clear</button>` : ""}
+        <div class="hint">Click a segment to filter the whole page. "Not set" means no committed date or milestones — not on track, not known.</div></div>
+      <div class="card-b">
+        <div class="stackbar">${parts.map((x) => `<button style="flex:0 0 ${(x.n / total) * 100}%;background:${colour[x.k]}" data-act="health-filter" data-key="${x.k}" aria-pressed="${sel.includes(x.k)}" data-tip="${esc(`${HEALTH[x.k]}: ${x.n} (${Math.round((x.n / total) * 100)}%)`)}">${(x.n / total) > 0.07 ? x.n : ""}</button>`).join("")}</div>
+        <div class="legend">${parts.map((x) => `<button data-act="health-filter" data-key="${x.k}" aria-pressed="${sel.includes(x.k)}"><i class="dot" style="background:${colour[x.k]}"></i>${esc(HEALTH[x.k])} <b class="num">${x.n}</b> <span class="muted">${Math.round((x.n / total) * 100)}%</span></button>`).join("")}</div>
       </div>
-      <div class="stat">
-        <div class="k">Active revenue</div>
-        <div class="v num">₹${esc((t.activeRev / 1e7).toFixed(2))}<small>Cr</small></div>
-        <div class="n">${t.active} live · ${esc(pct(t.activeRev, t.rev).toFixed(0))}% of book</div>
+    </section>`;
+}
+
+function riskSection(list) {
+  const rows = riskTable(list);
+  const sort = S.sort.risk;
+  const keyOf = {
+    priority: (r) => PRIO_ORDER[r.p.priority || ""], project: (r) => r.p.label.toLowerCase(), dm: (r) => (r.p.primaryDm || "").toLowerCase(),
+    next: (r) => (r.delivery.forecast || r.delivery.baseline || "9999"), days: (r) => r.delivery.daysRemaining ?? 9999, rev: (r) => r.rev, updated: (r) => r.last?.date || "",
+  };
+  const sorted = rows.slice().sort((a, b) => {
+    if (sort.key === "priority") return 0;      // default order: critical first, then priority, then revenue
+    const ka = keyOf[sort.key]?.(a), kb = keyOf[sort.key]?.(b);
+    return (ka < kb ? -1 : ka > kb ? 1 : 0) * sort.dir;
+  });
+  const th = (label, key, cls = "", tip = "") => `<th class="${cls}" data-act="sort" data-table="risk" data-key="${key}">${tip ? `<span class="th-help" data-tip="${esc(tip)}">${esc(label)}</span>` : esc(label)}${sort.key === key ? `<span class="arw">${sort.dir > 0 ? "▲" : "▼"}</span>` : ""}</th>`;
+
+  return `
+    <section class="card" style="margin-bottom:12px">
+      <div class="card-h"><h2>Projects at risk — priority actions</h2><span class="chip ${rows.length ? "on" : "ring"}">${rows.length}</span><span class="spacer"></span>
+        <button class="btn xs" data-act="export">Export</button>
+        <div class="hint">Overdue, forecast to miss, blocked or escalated. Critical first. Revenue at risk is this row's attributed revenue.</div></div>
+      <div class="scroller" style="max-height:60vh">
+        <table class="rows">
+          <thead><tr>${th("Priority", "priority")}${th("Client / project", "project")}${th("DM", "dm")}<th>SDM</th><th>Current milestone</th>${th("Next date", "next", "", "Forecast date of the next open milestone, or the final delivery.")}<th>Final delivery</th>${th("Days", "days", "r", "Days to the forecast delivery, or days past the commitment.")}<th>Risk reason</th>${th("Revenue at risk", "rev", "r")}${th("Last update", "updated")}<th></th></tr></thead>
+          <tbody>${sorted.map((r) => {
+            const f = forecastOf(r.p);
+            const cur = f.current;
+            const nextDate = cur ? f.milestones.get(cur.id)?.forecast : (r.delivery.forecast || r.delivery.baseline);
+            return `<tr class="clickable ${r.health.key === "critical" ? "crit" : "warn"}" data-act="open-project" data-id="${esc(r.p.id)}">
+              <td>${prioBadge(r.p.priority)}</td>
+              <td>${projectCell(r.p)}<div class="cell-sub">${healthPill(r.p, true)} ${escBadge(r.p)}</div></td>
+              <td>${r.p.primaryDm ? `${avatar(r.p.primaryDm, "sm")} ${esc(r.p.primaryDm)}` : '<span class="muted">—</span>'}</td>
+              <td>${esc(r.p.sdm || "—")}</td>
+              <td>${cur ? `${esc(cur.title)}<div class="cell-sub">${esc(cur.status === "blocked" ? "blocked" : cur.status === "in_progress" ? "in progress" : "next")}</div>` : '<span class="notset">No milestones</span>'}</td>
+              <td class="num">${nextDate ? esc(fmtDate(nextDate)) : '<span class="notset">Not set</span>'}</td>
+              <td>${deliveryCell(r.p)}</td>
+              <td class="r">${daysCell(r.p)}</td>
+              <td><div class="cell-sub wrap" style="color:var(--ink)">${esc(r.reason)}</div></td>
+              <td class="r">${revCell(r.p)}</td>
+              <td>${lastUpdateCell(r.p)}</td>
+              <td class="r">${viewBtn(r.p)}</td>
+            </tr>`;
+          }).join("") || `<tr><td colspan="12"><div class="empty"><div class="big">Nothing at risk inside these filters</div>Overdue, slipping, blocked and escalated projects land here.</div></td></tr>`}</tbody>
+        </table>
       </div>
-      <div class="stat">
-        <div class="k">Parked on hold</div>
-        <div class="v num">₹${esc((t.holdRev / 1e7).toFixed(2))}<small>Cr</small></div>
-        <div class="n">${t.hold} projects · ${t.upcoming} upcoming</div>
-      </div>
-      <div class="stat ${t.seriousRev > t.rev * 0.2 ? "accent" : ""}">
-        <div class="k">Revenue on serious flags</div>
-        <div class="v num">₹${esc((t.seriousRev / 1e7).toFixed(2))}<small>Cr</small></div>
-        <div class="n">${t.serious} projects ·
-          <a href="#escalations" data-act="goto" data-view="escalations">see them</a></div>
-      </div>
-      <div class="stat">
-        <div class="k">Top client dependency</div>
-        <div class="v num">${esc((conc.top1 * 100).toFixed(0))}<small>%</small></div>
-        <div class="n">${esc(conc.list[0]?.name || "—")} · top 3 = ${esc((conc.top3 * 100).toFixed(0))}%</div>
+    </section>`;
+}
+
+function dmSection(list) {
+  const rows = dmPerformance(list);
+  const sort = S.sort.dm;
+  const keyOf = { name: (r) => r.name.toLowerCase(), active: (r) => r.active, high: (r) => r.high, risk: (r) => r.atRisk, rev: (r) => r.rev, perEditor: (r) => r.perEditor ?? -1, onTime: (r) => r.onTime ?? -1, overdue: (r) => r.overdueMs, compliance: (r) => r.compliance ?? -1, points: (r) => r.points };
+  const sorted = rows.slice().sort((a, b) => { const ka = keyOf[sort.key]?.(a), kb = keyOf[sort.key]?.(b); return (ka < kb ? -1 : ka > kb ? 1 : 0) * sort.dir; });
+  const th = (label, key, cls = "", tip = "") => `<th class="${cls}" data-act="sort" data-table="dm" data-key="${key}">${tip ? `<span class="th-help" data-tip="${esc(tip)}">${esc(label)}</span>` : esc(label)}${sort.key === key ? `<span class="arw">${sort.dir > 0 ? "▲" : "▼"}</span>` : ""}</th>`;
+  const pctOr = (v) => v == null ? '<span class="notset">No data</span>' : `${Math.round(v * 100)}%`;
+
+  return `
+    <div class="grid" style="grid-template-columns:minmax(0,2fr) minmax(300px,1fr);margin-bottom:12px">
+      <section class="card">
+        <div class="card-h"><h2>DM performance and workload</h2><span class="spacer"></span>
+          <div class="hint">Shared projects split evenly between their DMs. Effort points show scope and complexity beside the counts — rank on those together, not on project count alone.</div></div>
+        <div class="scroller" style="max-height:52vh">
+          <table class="rows compact">
+            <thead><tr>${th("DM", "name")}${th("Active", "active", "r")}${th("High", "high", "r", "Active projects marked High priority")}${th("At risk", "risk", "r")}${th("Effort", "points", "r", "Assumed effort points across their projects — the scope-and-complexity view")}${th("Revenue", "rev", "r", "Attributed revenue; also the revenue-per-DM figure for this person")}${th("Per editor", "perEditor", "r", "Active projects ÷ distinct editors on their projects")}${th("On time", "onTime", "r", "Milestones completed on or before their committed date, as a share of completed milestones")}${th("Overdue ms", "overdue", "r", "Open milestones past their committed date")}${th("Updates", "compliance", "r", "Active projects updated inside the stale window")}</tr></thead>
+            <tbody>${sorted.map((r) => `<tr class="clickable" data-act="open-person" data-name="${esc(r.name)}">
+              <td><div class="cell-name">${avatar(r.name, "sm")} ${esc(r.name)}</div><div class="cell-sub">${r.editorCount} editor${r.editorCount === 1 ? "" : "s"}</div></td>
+              <td class="r num">${num(r.active, 1)}</td><td class="r num">${num(r.high, 1)}</td>
+              <td class="r num ${r.atRisk ? "" : "muted"}" style="${r.atRisk >= 2 ? "color:var(--crit-ink);font-weight:600" : ""}">${num(r.atRisk, 1)}</td>
+              <td class="r num">${num(r.points, 1)}</td>
+              <td class="r num">${esc(money(r.rev))}</td>
+              <td class="r num">${r.perEditor == null ? '<span class="notset">—</span>' : num(r.perEditor, 1)}</td>
+              <td class="r num">${pctOr(r.onTime)}</td>
+              <td class="r num ${r.overdueMs ? "" : "muted"}">${num(r.overdueMs, 0)}</td>
+              <td class="r num">${pctOr(r.compliance)}</td>
+            </tr>`).join("") || `<tr><td colspan="10" class="muted">No DMs inside these filters.</td></tr>`}</tbody>
+          </table>
+        </div>
+      </section>
+      <div class="grid">
+        <section class="card"><div class="card-h"><h2>Active projects per DM</h2></div>
+          <div class="card-b">${hbar(rows.slice().sort((a, b) => b.active - a.active).slice(0, 12).map((r) => ({ label: r.name, value: r.active, r })), { aria: "Active projects per DM", fmt: (v) => num(v, 1), height: 16, gap: 5, labelWidth: 140, colour: () => "var(--s1)", tipRows: (x) => [["Active", num(x.r.active, 1)], ["Effort points", num(x.r.points, 1)], ["At risk", num(x.r.atRisk, 1)]] })}</div></section>
+        <section class="card"><div class="card-h"><h2>Revenue per DM</h2></div>
+          <div class="card-b">${hbar(rows.slice().sort((a, b) => b.rev - a.rev).slice(0, 12).map((r) => ({ label: r.name, value: r.rev, r })), { aria: "Revenue per DM", height: 16, gap: 5, labelWidth: 140, colour: () => "var(--s3)", tipRows: (x) => [["Revenue", money(x.r.rev)], ["Projects", String(x.r.projects)]] })}</div></section>
       </div>
     </div>`;
 }
 
-/* ------------------------------------------------------ run the numbers */
+function upcoming(list) {
+  const rows = upcomingDeliveries(7, list);
+  return `
+    <section class="card" style="margin-bottom:12px">
+      <div class="card-h"><h2>Upcoming delivery commitments — next 7 days</h2><span class="chip ring">${rows.length}</span><span class="spacer"></span><button class="btn xs" data-act="goto" data-page="timeline" data-tab="calendar">Calendar</button>
+        <div class="hint">Final deliveries and milestones forecast to land by ${esc(fmtDateFull(new Date(Date.parse(TODAY) + 7 * 864e5).toISOString().slice(0, 10)))}.</div></div>
+      <div class="scroller" style="max-height:40vh">
+        <table class="rows compact">
+          <thead><tr><th>Date</th><th>Client / project</th><th>Deliverable</th><th>DM</th><th>Priority</th><th>Status</th></tr></thead>
+          <tbody>${rows.map((r) => `<tr class="clickable" data-act="open-project" data-id="${esc(r.p.id)}">
+            <td class="num"><b>${esc(fmtDate(r.date))}</b><div class="cell-sub">${esc(r.date === TODAY ? "today" : ago(r.date))}</div></td>
+            <td>${projectCell(r.p)}</td>
+            <td>${r.kind === "final" ? `<b>Final delivery</b>` : esc(r.title)}${r.baseline && r.baseline !== r.date ? `<div class="cell-sub">committed ${esc(fmtDate(r.baseline))}</div>` : ""}</td>
+            <td>${r.p.primaryDm ? `${avatar(r.p.primaryDm, "sm")} ${esc(r.p.primaryDm)}` : "—"}</td>
+            <td>${prioBadge(r.p.priority)}</td>
+            <td>${healthPill(r.p, true)}</td>
+          </tr>`).join("") || `<tr><td colspan="6"><div class="empty">Nothing is due in the next 7 days inside these filters.</div></td></tr>`}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
 
-function levers() {
+function scenario() {
+  const open = recall("overview.scenario", false);
   const s = sc();
   const t = totals();
   const conc = concentration();
-
-  const slider = (key, label, sub, min, max, step, value, fmt) => `
-    <div class="scenario-row">
-      <div class="lab">${esc(label)}<small>${esc(sub)}</small></div>
-      <div class="out">${esc(fmt(value))}</div>
-      <input class="sl" type="range" min="${min}" max="${max}" step="${step}" value="${value}"
-             data-input="lever" data-key="${key}" aria-label="${esc(label)}">
-    </div>`;
-
-  return `
-    <section class="card">
-      <div class="card-h">
-        <h2>Run the numbers</h2>
-        <span class="spacer"></span>
-        <button class="btn sm ghost" data-act="reset-scenario">Reset</button>
-        <div class="hint">Nothing here changes the board. It is a projection off today's ${esc(fmtCr(t.rev))}.
-          For headcount and capacity, use Delivery load.</div>
-      </div>
-      <div class="card-b">
-        ${slider("activateHold", "Unfreeze on-hold work", `${esc(fmtCr(t.holdRev))} parked across ${t.hold} projects`,
-          0, 1, 0.05, s.activateHold, (v) => (v * 100).toFixed(0) + "%")}
-        ${slider("winNewCr", "New business won", "brand-new clients, in ₹ Cr", 0, 10, 0.25, s.winNewCr,
-          (v) => "₹" + v.toFixed(2) + "Cr")}
-        ${slider("priceUplift", "Rate change across the book", "repricing every retainer", -25, 50, 1, s.priceUplift,
-          (v) => (v > 0 ? "+" : "") + v + "%")}
-      </div>
-
-      <div class="card-h" style="border-top:1px solid var(--line)">
-        <h2>Assume we lose…</h2>
-        <span class="spacer"></span>
-        ${s.churn.length ? `<span class="chip on">${s.churn.length} client${s.churn.length === 1 ? "" : "s"}</span>` : ""}
-        <div class="hint">Click a client to model it walking away.</div>
-      </div>
-      <div class="card-b">
-        <div style="display:flex;flex-wrap:wrap;gap:6px">
-          ${conc.list.slice(0, 12).map((c) => `
-            <button class="chip ${s.churn.includes(c.key) ? "on" : "ring"}" data-act="toggle-churn" data-key="${esc(c.key)}">
-              ${esc(c.name)} <span class="num muted">${esc((c.rev / 1e7).toFixed(2))}Cr</span>
-            </button>`).join("")}
-        </div>
-      </div>
-    </section>`;
-}
-
-function assumptions() {
-  const set = settings();
-  const field = (key, label, val, step = 1, suffix = "") => `
-    <div class="field">
-      <label for="as-${key}">${esc(label)}</label>
-      <input id="as-${key}" type="number" step="${step}" value="${esc(val)}"
-             data-change="assumption" data-key="${key}" ${canEdit() ? "" : "disabled"}>
-      ${suffix ? `<span class="muted" style="font-size:11px">${esc(suffix)}</span>` : ""}
-    </div>`;
-  return `
-    <section class="card">
-      <div class="card-h"><h2>Assumptions</h2>
-        <div class="hint">Shared with the whole board — Delivery load reads the same ceilings.</div>
-      </div>
-      <div class="card-b">
-        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px">
-          ${field("targetRevenueCr", "Revenue target (₹ Cr)", set.targetRevenueCr, 0.5)}
-          ${field("capacityPerDM", "Projects per DM", set.capacityPerDM, 1, "before over capacity")}
-          ${field("capacityPerEditor", "Projects per editor lead", set.capacityPerEditor, 1)}
-          ${field("costPerDM", "Cost per DM", set.costPerDM, 50000, "per year, ₹")}
-          ${field("costPerEditor", "Cost per editor", set.costPerEditor, 50000, "per year, ₹")}
-          ${field("staleUpdateDays", "Update goes stale after", set.staleUpdateDays, 1, "days")}
-        </div>
-      </div>
-    </section>`;
-}
-
-function outcomes() {
-  const r = runScenario(sc());
-  const { before, after } = r;
-  const set = settings();
-  const target = (set.targetRevenueCr || 0) * 1e7;
+  const r = runScenario(s);
   const pctFmt = (v) => (v * 100).toFixed(0) + "%";
-
-  const deltaTag = (b, a, fmt, goodUp = true) => {
-    const d = a - b;
-    if (Math.abs(d) < (Math.abs(b) || 1) * 0.0005) return `<span class="delta muted">no change</span>`;
-    const good = goodUp ? d > 0 : d < 0;
-    return `<span class="delta ${good ? "up" : "down"}">${d > 0 ? "▲" : "▼"} ${esc(fmt(Math.abs(d)))}</span>`;
-  };
-  const row = (label, b, a, fmt, goodUp = true) => `
-    <tr>
-      <td><div class="cell-name">${esc(label)}</div></td>
-      <td class="r num muted">${esc(fmt(b))}</td>
-      <td class="r num"><b>${esc(fmt(a))}</b></td>
-      <td class="r">${deltaTag(b, a, fmt, goodUp)}</td>
-    </tr>`;
-
-  const notes = [];
-  if (target && after.rev >= target) {
-    notes.push({ ok: true, text: `Clears the ₹${set.targetRevenueCr} Cr target with ${money(after.rev - target)} to spare.` });
-  } else if (target) {
-    notes.push({ ok: false, text: `Still ${money(target - after.rev)} short of the ₹${set.targetRevenueCr} Cr target.` });
-  }
-  if (after.top1 > 0.35) {
-    notes.push({ ok: false, text: `One client would be ${pctFmt(after.top1)} of the book — a single conversation away from a bad quarter.` });
-  }
-  if (after.margin < before.margin - 0.01) {
-    notes.push({ ok: false, text: `Contribution margin drops from ${pctFmt(before.margin)} to ${pctFmt(after.margin)}.` });
-  }
-
+  const slider = (key, label, sub, min, max, step, value, fmt) => `
+    <div class="scenario-row"><div class="lab">${esc(label)}<small>${esc(sub)}</small></div><div class="out">${esc(fmt(value))}</div>
+      <input class="sl" type="range" min="${min}" max="${max}" step="${step}" value="${value}" data-input="lever" data-key="${key}" aria-label="${esc(label)}"></div>`;
+  const row = (label, b, a, fmt) => `<tr><td>${esc(label)}</td><td class="r num muted">${esc(fmt(b))}</td><td class="r num"><b>${esc(fmt(a))}</b></td></tr>`;
   return `
-    <section class="card">
-      <div class="card-h"><h2>What that does</h2>
-        <span class="spacer"></span><span class="chip ring">today → scenario</span></div>
-      <div class="scroller">
-        <table class="rows">
-          <thead><tr><th>Measure</th><th class="r">Today</th><th class="r">Scenario</th><th class="r">Change</th></tr></thead>
-          <tbody>
-            ${row("Book of business", before.rev, after.rev, money)}
-            ${row("Active revenue", before.activeRev, after.activeRev, money)}
-            ${row("Contribution", before.contribution, after.contribution, money)}
-            ${row("Contribution margin", before.margin, after.margin, pctFmt)}
-            ${row("Top client share", before.top1, after.top1, pctFmt, false)}
-            ${row("Top 3 share", before.top3, after.top3, pctFmt, false)}
-          </tbody>
-        </table>
-      </div>
-      ${notes.length ? `<div class="card-b" style="display:grid;gap:8px;border-top:1px solid var(--line)">
-        ${notes.map((n) => `<div class="callout ${n.ok ? "" : "warn"}"
-          style="${n.ok ? "background:var(--good-wash);border-color:color-mix(in srgb,var(--good) 30%,transparent)" : ""}">
-          <span>${n.ok ? "✓" : "●"}</span><span>${esc(n.text)}</span></div>`).join("")}
-      </div>` : ""}
-      ${target ? `<div class="card-b" style="border-top:1px solid var(--line)">
-        ${bullet(after.rev, target, { label: "Scenario book against target", sub: `Today it is ${money(before.rev)}` })}
-      </div>` : ""}
-    </section>`;
-}
-
-/* ------------------------------------------------------------ the book */
-
-function podPanel() {
-  const pods = podRollup();
-  const t = totals();
-  return `
-    <section class="card">
-      <div class="card-h">
-        <h2>Revenue by pod</h2>
-        <span class="spacer"></span>
-        <button class="btn sm ghost" data-act="goto" data-view="load">Load by pod →</button>
-        <div class="hint">Client revenue is split across that client's project rows, so these
-          add back up to ${esc(fmtCr(t.rev))}.</div>
-      </div>
+    <section class="card ${open ? "" : "collapsed"}" id="scenario-card">
+      <div class="card-h"><h2>Scenario — what if the book changes</h2><span class="spacer"></span>
+        <button class="btn xs ghost" data-act="reset-scenario">Reset</button>
+        <button class="toggle" data-act="toggle-card" data-key="overview.scenario" data-id="scenario-card">${open ? "Hide ▴" : "Show ▾"}</button>
+        <div class="hint">A projection off today's ${esc(fmtCr(t.rev))}. Nothing here changes the board.</div></div>
       <div class="card-b">
-        ${hbar(pods.map((p) => ({ label: p.name, value: p.rev, p })), {
-          aria: "Revenue by pod",
-          labelWidth: 140,
-          colour: (r, i) => seriesVar(i + 1),
-          tipRows: (r) => [
-            ["Revenue", money(r.p.rev)],
-            ["Projects", String(r.p.load)],
-            ["Clients", String(r.p.clientCount)],
-          ],
-        })}
-      </div>
-    </section>`;
-}
-
-function concentrationPanel() {
-  const c = concentration();
-  const top = c.list.slice(0, 10).map((x) => ({ label: x.name, value: x.rev, c: x }));
-  const rest = c.list.slice(10).reduce((s, x) => s + x.rev, 0);
-  const restCount = c.list.length - 10;
-
-  return `
-    <section class="card">
-      <div class="card-h">
-        <h2>Where the money comes from</h2>
-        <span class="spacer"></span>
-        <span class="chip ${c.top3 > 0.5 ? "on" : "ring"}">${esc((c.top3 * 100).toFixed(0))}% in the top 3</span>
-        <div class="hint">${c.billing} clients are actually billing; the spread is worth about
-          ${esc(c.effectiveClients.toFixed(1))} of them.</div>
-      </div>
-      <div class="card-b">
-        ${hbar(top, {
-          aria: "Revenue by client, top ten",
-          labelWidth: 150,
-          colour: () => "var(--s1)",
-          tipRows: (r) => [
-            ["Revenue", money(r.c.rev)],
-            ["Share of book", ((r.c.rev / c.total) * 100).toFixed(1) + "%"],
-            ["Project rows", String(r.c.load)],
-          ],
-          note: rest > 0 ? `Top 10 shown. The other ${restCount} billing clients add up to ${money(rest)}.` : null,
-        })}
-      </div>
-    </section>`;
-}
-
-function mixPanel() {
-  const cats = categoryRollup();
-  const t = totals();
-  return `
-    <section class="card">
-      <div class="card-h"><h2>What the book is made of</h2>
-        <span class="spacer"></span>
-        <button class="btn sm ghost" data-act="goto" data-view="load">Effort by work type →</button>
-        <div class="hint">Revenue by service line, and by whether it is actually moving.</div>
-      </div>
-      <div class="card-b">
-        <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:6px">By service line</div>
-        ${stackBar(cats.map((c, i) => ({ label: c.name, value: c.rev, colour: seriesVar(i + 1) })))}
-        <div style="font-size:11.5px;color:var(--ink-3);margin:18px 0 6px">By state</div>
-        ${stackBar([
-          { label: "Active", value: t.activeRev, colour: "var(--good)" },
-          { label: "On hold", value: t.holdRev, colour: "var(--warn)" },
-          { label: "Upcoming", value: t.upcomingRev, colour: "var(--s1)" },
-        ].filter((p) => p.value > 0))}
+        <div class="split">
+          <div>
+            ${slider("activateHold", "Unfreeze on-hold work", `${esc(fmtCr(t.holdRev))} parked across ${t.hold} projects`, 0, 1, 0.05, s.activateHold, (v) => (v * 100).toFixed(0) + "%")}
+            ${slider("winNewCr", "New business won", "brand-new clients, in ₹ Cr", 0, 10, 0.25, s.winNewCr, (v) => "₹" + v.toFixed(2) + "Cr")}
+            ${slider("priceUplift", "Rate change across the book", "repricing every retainer", -25, 50, 1, s.priceUplift, (v) => (v > 0 ? "+" : "") + v + "%")}
+            <div class="muted small" style="margin:10px 0 6px">Assume we lose…</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">${conc.list.slice(0, 12).map((c) => `<button class="chip ${s.churn.includes(c.key) ? "on" : "ring"}" data-act="toggle-churn" data-key="${esc(c.key)}">${esc(c.name)} <span class="num muted">${esc((c.rev / 1e7).toFixed(2))}Cr</span></button>`).join("")}</div>
+          </div>
+          <div>
+            <table class="rows compact"><thead><tr><th>Measure</th><th class="r">Today</th><th class="r">Scenario</th></tr></thead><tbody>
+              ${row("Book of business", r.before.rev, r.after.rev, money)}${row("Active revenue", r.before.activeRev, r.after.activeRev, money)}
+              ${row("Contribution margin", r.before.margin, r.after.margin, pctFmt)}${row("Top client share", r.before.top1, r.after.top1, pctFmt)}${row("Top 3 share", r.before.top3, r.after.top3, pctFmt)}
+            </tbody></table>
+            ${settings().targetRevenueCr ? `<div style="margin-top:12px">${bullet(r.after.rev, settings().targetRevenueCr * 1e7, { label: "Scenario book against target" })}</div>` : ""}
+          </div>
+        </div>
       </div>
     </section>`;
 }
 
 export function renderOverview() {
-  return `
-    <div class="head">
-      <div>
-        <h1>Overview</h1>
-        <div class="lede">What the book is worth, where it is concentrated, and what happens if it
-          changes. Team time is on Delivery load; anything on fire is on Escalations.</div>
-      </div>
-      <div class="head-actions">
-        <button class="btn" data-act="export">Export to Excel</button>
-      </div>
-    </div>
-
-    ${statTiles()}
-
-    <div class="split" style="margin-top:14px">
-      <div class="grid">${levers()}${assumptions()}</div>
-      <div class="grid">${outcomes()}</div>
-    </div>
-
-    <div class="grid g2" style="margin-top:14px">
-      ${podPanel()}
-      ${concentrationPanel()}
-    </div>
-
-    <div style="margin-top:14px">${mixPanel()}</div>`;
+  const list = filtered();
+  return `<div class="page">
+    <div class="head"><div><h1>Executive overview</h1><div class="lede">The delivery portfolio in one screen: exposure, ownership, what is at risk and what lands next.</div></div>
+      <div class="head-actions"><button class="btn sm" data-act="export">Export to Excel</button></div></div>
+    ${filterBar()}
+    ${kpis(list)}
+    ${healthBar(list)}
+    ${riskSection(list)}
+    ${dmSection(list)}
+    ${upcoming(list)}
+    ${scenario()}
+  </div>`;
 }

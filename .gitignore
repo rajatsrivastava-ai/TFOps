@@ -6,6 +6,8 @@ data/
 PodLoadBoard.html
 RevenueVsDM_*.xlsx
 *.xlsx
+# The flattened export the Excel builder reads. Same client book, one file.
+board-export.json
 
 # ── Secrets ────────────────────────────────────────────────────────────────
 passwords.cmd

@@ -8,6 +8,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test \"tests/**/*.test.*\"",
     "seed": "node lib/seed.js",
     "push": "node tools/remote.js push",
     "pull": "node tools/remote.js pull"
